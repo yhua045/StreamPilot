@@ -14,6 +14,7 @@ import { runAgentInference } from './services/geminiService';
 import MetricsChart from './components/MetricsChart';
 
 const AGENT_API_URL = 'http://localhost:8080/api/status';
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 const App: React.FC = () => {
   // Config
@@ -41,6 +42,24 @@ const App: React.FC = () => {
   const [isAgentRunning, setIsAgentRunning] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   
+  // Computed Session Info
+  const activeSession = useMemo(() => {
+    const now = currentTime;
+    const currentDay = now.getDay();
+    const currentHHmm = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+    
+    return BROADCAST_SCHEDULE.find(s => {
+      return s.day === currentDay && currentHHmm >= s.startTime && currentHHmm <= s.endTime;
+    });
+  }, [currentTime]);
+
+  const allScheduledSessions = useMemo(() => {
+    return [...BROADCAST_SCHEDULE].sort((a, b) => {
+      if (a.day !== b.day) return a.day - b.day;
+      return a.startTime.localeCompare(b.startTime);
+    });
+  }, []);
+
   // Background Sync Loop
   useEffect(() => {
     if (!isSyncMode) return;
@@ -144,10 +163,6 @@ YOUTUBE_REFRESH_TOKEN=${ytConfig.refreshToken || ''}`;
                   >
                     <i className="fas fa-copy mr-2"></i> Copy .env Template
                   </button>
-                  <div className="space-y-3">
-                    <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Target Dependencies</h4>
-                    <p className="text-[11px] text-slate-400">Install these on the production machine: <code className="bg-slate-900 px-1.5 py-0.5 rounded text-blue-400">@google/genai dotenv express cors</code></p>
-                  </div>
                 </div>
               )}
 
@@ -176,56 +191,75 @@ YOUTUBE_REFRESH_TOKEN=${ytConfig.refreshToken || ''}`;
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button onClick={() => setIsSettingsOpen(true)} className="p-3 rounded-2xl border border-slate-800 text-slate-400 hover:text-white transition-all">
-             <i className="fas fa-cog"></i>
-          </button>
-          {!isSyncMode && (
-             <button 
-              onClick={() => setIsAgentRunning(!isAgentRunning)}
-              className={`px-8 py-3 rounded-2xl font-black text-[10px] tracking-widest uppercase transition-all ${
-                isAgentRunning ? 'bg-red-500/10 text-red-400 border border-red-500/50' : 'bg-blue-600 text-white shadow-xl'
-              }`}
-            >
-              {isAgentRunning ? 'Stop UI Loop' : 'Start UI Loop'}
-            </button>
-          )}
-          {isSyncMode && (
-            <div className="px-6 py-3 rounded-2xl bg-purple-600/10 border border-purple-500/30 text-purple-400 font-black text-[10px] tracking-widest uppercase">
-              Monitoring Service
+        <div className="flex items-center gap-6">
+          <div className="text-right hidden sm:block">
+            <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Local Time</div>
+            <div className="text-xl font-mono font-bold text-white leading-tight">
+              {currentTime.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </div>
-          )}
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setIsSettingsOpen(true)} className="p-3 rounded-2xl border border-slate-800 text-slate-400 hover:text-white transition-all">
+               <i className="fas fa-cog"></i>
+            </button>
+            {!isSyncMode && (
+               <button 
+                onClick={() => setIsAgentRunning(!isAgentRunning)}
+                className={`px-8 py-3 rounded-2xl font-black text-[10px] tracking-widest uppercase transition-all ${
+                  isAgentRunning ? 'bg-red-500/10 text-red-400 border border-red-500/50' : 'bg-blue-600 text-white shadow-xl'
+                }`}
+              >
+                {isAgentRunning ? 'Stop UI Loop' : 'Start UI Loop'}
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
         <div className="lg:col-span-8 flex flex-col gap-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="glass p-6 rounded-3xl border-slate-800/50">
-              <span className="text-slate-500 text-[10px] font-black uppercase mb-2 block">YouTube ID</span>
+          {/* Dashboard Summary */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="glass p-5 rounded-3xl border-slate-800/50">
+              <span className="text-slate-500 text-[9px] font-black uppercase mb-2 block tracking-widest">Active Slot</span>
+              <div className={`text-sm font-bold truncate ${activeSession ? 'text-white' : 'text-slate-600 italic'}`}>
+                {activeSession ? `${DAY_NAMES[activeSession.day]} ${activeSession.name}` : 'No Active Session'}
+              </div>
+            </div>
+            <div className="glass p-5 rounded-3xl border-slate-800/50">
+              <span className="text-slate-500 text-[9px] font-black uppercase mb-2 block tracking-widest">YouTube ID</span>
               <div className="text-sm font-mono font-bold text-slate-200 truncate">{ytConfig.broadcastId || 'IDLE'}</div>
             </div>
-            <div className="glass p-6 rounded-3xl border-slate-800/50">
-              <span className="text-slate-500 text-[10px] font-black uppercase mb-2 block">Session Status</span>
+            <div className="glass p-5 rounded-3xl border-slate-800/50">
+              <span className="text-slate-500 text-[9px] font-black uppercase mb-2 block tracking-widest">Signal Status</span>
               <div className="flex items-center gap-2">
                  <div className={`w-2 h-2 rounded-full ${status === StreamStatus.LIVE ? 'bg-red-500 status-pulse' : 'bg-slate-600'}`}></div>
                  <div className="text-sm font-bold uppercase text-white">{status}</div>
               </div>
             </div>
-            <div className="glass p-6 rounded-3xl border-slate-800/50">
-              <span className="text-slate-500 text-[10px] font-black uppercase mb-2 block">Bitrate</span>
+            <div className="glass p-5 rounded-3xl border-slate-800/50">
+              <span className="text-slate-500 text-[9px] font-black uppercase mb-2 block tracking-widest">Bitrate</span>
               <div className="text-sm font-mono font-bold text-blue-400">{metrics.bitrate.toLocaleString()} kbps</div>
             </div>
           </div>
 
           <div className="glass p-8 rounded-3xl border-slate-800/50">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Live Telemetry</h3>
+              <div className="flex gap-4">
+                <div className="flex items-center gap-2">
+                   <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
+                   <span className="text-[10px] text-slate-400 font-bold uppercase">Bitrate</span>
+                </div>
+              </div>
+            </div>
             <MetricsChart data={metricsHistory} />
           </div>
 
           <div className="glass rounded-3xl flex flex-col flex-1 min-h-[350px] overflow-hidden">
              <div className="bg-slate-800/30 px-6 py-4 border-b border-slate-800 flex justify-between items-center">
-                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Live Agent Logs</span>
-                {isSyncMode && <span className="text-[9px] text-purple-400 font-bold"><i className="fas fa-cloud-download-alt mr-1"></i> SYNCED</span>}
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Execution Logs</span>
+                {isSyncMode && <span className="text-[9px] text-purple-400 font-bold"><i className="fas fa-cloud-download-alt mr-1"></i> REMOTE SYNC</span>}
              </div>
              <div className="p-6 flex-1 overflow-y-auto font-mono text-xs space-y-2">
                {logs.map((log: any) => (
@@ -237,14 +271,47 @@ YOUTUBE_REFRESH_TOKEN=${ytConfig.refreshToken || ''}`;
                    <span className="text-slate-300">{log.message}</span>
                  </div>
                ))}
-               {logs.length === 0 && <div className="text-slate-600 italic">No activity detected.</div>}
+               {logs.length === 0 && <div className="text-slate-600 italic">Awaiting protocol execution...</div>}
              </div>
           </div>
         </div>
 
+        {/* Sidebar */}
         <div className="lg:col-span-4 flex flex-col gap-6">
-           <section className="glass p-8 rounded-3xl">
-             <h3 className="font-black text-[11px] tracking-widest text-slate-500 uppercase mb-6">Device Context</h3>
+           {/* Schedule Section */}
+           <section className="glass rounded-3xl flex flex-col overflow-hidden">
+             <div className="bg-slate-800/30 px-6 py-4 border-b border-slate-800">
+                <h3 className="font-black text-[10px] tracking-widest text-slate-500 uppercase">Scheduled Sessions</h3>
+             </div>
+             <div className="p-6 space-y-4">
+                {allScheduledSessions.length > 0 ? allScheduledSessions.map(s => {
+                   const nowDay = currentTime.getDay();
+                   const currentTimeStr = currentTime.getHours().toString().padStart(2, '0') + ':' + currentTime.getMinutes().toString().padStart(2, '0');
+                   const isNow = activeSession?.id === s.id;
+                   const isPast = (s.day < nowDay) || (s.day === nowDay && currentTimeStr > s.endTime);
+
+                   return (
+                    <div key={s.id} className={`p-4 rounded-2xl border transition-all ${isNow ? 'bg-blue-600/10 border-blue-500/50' : 'bg-slate-900/50 border-slate-800/50'}`}>
+                      <div className="flex justify-between items-start mb-1">
+                        <span className={`text-[10px] font-bold uppercase tracking-wider ${isNow ? 'text-blue-400' : (isPast ? 'text-slate-600' : 'text-slate-400')}`}>
+                          {DAY_NAMES[s.day]} {s.startTime} — {s.endTime}
+                        </span>
+                        {isNow && <span className="text-[9px] font-black bg-blue-500 text-white px-1.5 py-0.5 rounded uppercase tracking-tighter animate-pulse">Live Now</span>}
+                      </div>
+                      <div className={`text-sm font-bold ${isPast ? 'text-slate-500' : 'text-white'}`}>{s.name}</div>
+                    </div>
+                   )
+                }) : (
+                  <div className="text-center py-6">
+                    <i className="fas fa-calendar-times text-slate-700 text-2xl mb-2"></i>
+                    <div className="text-[10px] text-slate-600 uppercase font-black">No sessions configured</div>
+                  </div>
+                )}
+             </div>
+          </section>
+
+          <section className="glass p-8 rounded-3xl">
+             <h3 className="font-black text-[10px] tracking-widest text-slate-500 uppercase mb-6">Device Context</h3>
              <div className="space-y-4">
                 <div className="flex justify-between items-center text-[11px]">
                   <span className="text-slate-500">Service Mode</span>
@@ -256,21 +323,25 @@ YOUTUBE_REFRESH_TOKEN=${ytConfig.refreshToken || ''}`;
                    <span className="text-slate-500">Node API</span>
                    <span className="text-slate-300 font-mono">localhost:8080</span>
                 </div>
+                <div className="flex justify-between items-center text-[11px]">
+                   <span className="text-slate-500">Hardware Link</span>
+                   <span className="text-green-400 font-bold uppercase tracking-tighter">Companion Port OK</span>
+                </div>
              </div>
           </section>
 
           <div className="flex-1 glass p-8 rounded-3xl flex flex-col items-center justify-center text-center gap-6 border-slate-800 relative overflow-hidden">
             <div className={`p-8 rounded-full border-2 transition-all duration-700 ${isSyncMode && isConnected ? 'border-green-500/50 text-green-400 bg-green-500/5' : 'border-slate-800 text-slate-800'}`}>
-              <i className={`fas ${isSyncMode ? 'fa-server' : 'fa-window-maximize'} text-5xl`}></i>
+              <i className={`fas ${isSyncMode ? 'fa-server' : 'fa-broadcast-tower'} text-5xl`}></i>
             </div>
             <div>
               <h4 className="font-black text-slate-300 uppercase tracking-widest text-[10px]">
-                {isSyncMode ? 'Background Agent Linked' : 'Standalone UI Active'}
+                {isSyncMode ? 'Headless Pilot Linked' : 'Virtual Pilot Ready'}
               </h4>
               <p className="text-[11px] text-slate-500 px-6 mt-3 leading-relaxed">
                 {isSyncMode 
-                  ? "The UI is currently a viewport for the Node.js background service. All logs and decisions are synced from the headless agent."
-                  : "The UI is running its own autonomous logic. Monitoring will stop if this tab is closed."}
+                  ? "Monitoring external Node.js process. You can close this browser; the agent will continue running autonomously."
+                  : "Local simulation. Logic executes within this tab. Do not close this window if standalone automation is required."}
               </p>
             </div>
           </div>

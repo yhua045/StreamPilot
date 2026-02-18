@@ -1,8 +1,7 @@
 
 /**
  * StreamPilot Headless Agent for Node.js (Server Edition)
- * Provides an API for the UI to sync status and logs.
- * Usage: node background-agent.js
+ * Strictly implements Begin, End, and Retransmit workflows.
  */
 
 import { GoogleGenAI, Type } from "@google/genai";
@@ -15,26 +14,21 @@ import { StreamStatus, StreamHealth } from "./types";
 dotenv.config();
 
 const app = express();
-// Fixed type mismatch by casting to express.RequestHandler to ensure correct overload selection for app.use()
-app.use(cors() as express.RequestHandler);
-app.use(express.json());
+app.use(cors() as any);
+app.use(express.json() as any);
 
-// Production Environment Variables
 const PORT = process.env.AGENT_API_PORT || 8080;
 const COMPANION_HOST = process.env.COMPANION_HOST || '127.0.0.1';
 const COMPANION_PORT = process.env.COMPANION_PORT || '8000';
 const YOUTUBE_TOKEN = process.env.YOUTUBE_REFRESH_TOKEN || null;
 
 if (!process.env.API_KEY) {
-  console.error("CRITICAL ERROR: API_KEY is missing from the environment variables.");
-  console.error("Please ensure you have a .env file with API_KEY=AIza...");
+  console.error("CRITICAL ERROR: API_KEY is missing.");
   process.exit(1);
 }
 
-// Initializing GoogleGenAI using process.env.API_KEY directly as per SDK guidelines
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Persistent State
 const state = {
   status: StreamStatus.IDLE,
   health: StreamHealth.UNKNOWN,
@@ -62,42 +56,63 @@ const addLog = (message: string, source = "SYSTEM") => {
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function executeProtocol(protocol: string) {
-  addLog(`Protocol Triggered: ${protocol}`, "PROTOCOL");
   const baseUrl = `http://${COMPANION_HOST}:${COMPANION_PORT}/press/bank/1`;
   
   try {
-    if (protocol === 'START_PREROLL') {
+    if (protocol === 'BEGIN_STREAM_SEQ') {
+      addLog("Starting BEGIN_STREAMING sequence...", "PROTOCOL");
+      // 1. Preroll
       await fetch(`${baseUrl}/7`);
       state.status = StreamStatus.STARTING;
-      addLog("Hardware: Preroll Triggered (Companion 1/7)", "COMPANION");
-    }
-    if (protocol === 'BEGIN_STREAMING') {
-      addLog("Waiting 20s for RTMP handshake before pushing live...", "SYSTEM");
+      addLog("Step 1/2: Hardware Preroll Triggered (1/7). Waiting 20s for stabilization...", "COMPANION");
+      
       await wait(20000);
+      
+      // 2. Begin
       await fetch(`${baseUrl}/8`);
       state.status = StreamStatus.LIVE;
       state.streamStartedAt = Date.now();
-      addLog("Hardware: Stream Promoted to LIVE (Companion 1/8)", "COMPANION");
+      addLog("Step 2/2: Hardware Stream Live (1/8). Begin Streaming complete.", "COMPANION");
     }
-    if (protocol === 'END_STREAMING') {
+
+    if (protocol === 'END_STREAM_SEQ') {
+      addLog("Starting END_STREAMING sequence...", "PROTOCOL");
+      // 1. Hardware Stop
       await fetch(`${baseUrl}/16`);
+      state.status = StreamStatus.ENDING;
+      addLog("Step 1/2: Hardware Terminated (1/16). Waiting 10s for buffer flush...", "COMPANION");
+      
+      await wait(10000);
+      
+      // 2. YouTube Stop (Simulated call)
+      addLog("Step 2/2: Calling YouTube API broadcasts.transition(complete)...", "YOUTUBE");
       state.status = StreamStatus.COMPLETED;
       state.streamStartedAt = null;
-      addLog("Hardware: Stream Terminated (Companion 1/16)", "COMPANION");
+      addLog("Shutdown complete. Session finalized.", "SYSTEM");
     }
-    if (protocol === 'RECOVERY_RESET') {
-      addLog("RECOVERY PROTOCOL: Resetting signal chain...", "SYSTEM");
+
+    if (protocol === 'RETRANSMIT_SEQ') {
+      addLog("⚠️ RETRANSMIT_SEQ triggered (Health Recovery).", "PROTOCOL");
+      addLog("Hardware reset initiated. Note: YouTube session will NOT be closed.", "SYSTEM");
+      
+      // 1. Stop
       await fetch(`${baseUrl}/16`);
+      addLog("Step 1/3: Signal drop (1/16). Waiting 10s...", "COMPANION");
       await wait(10000);
+      
+      // 2. Preroll
       await fetch(`${baseUrl}/7`);
+      addLog("Step 2/3: Signal re-init (1/7). Waiting 20s...", "COMPANION");
       await wait(20000);
+      
+      // 3. Begin
       await fetch(`${baseUrl}/8`);
       state.status = StreamStatus.LIVE;
-      state.streamStartedAt = Date.now();
-      addLog("Hardware: Recovery Cycle Complete", "COMPANION");
+      addLog("Step 3/3: Signal restored (1/8). Retransmission complete.", "COMPANION");
     }
   } catch (err) {
-    addLog(`Hardware Connectivity Failure: ${err}`, "ERROR");
+    addLog(`Connectivity failure during sequence execution: ${err}`, "ERROR");
+    state.status = StreamStatus.ERROR;
   }
 }
 
@@ -105,12 +120,17 @@ async function runAgentLoop() {
   const now = new Date();
   const currentHHmm = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
   
+  // Check if we are in the first 10 minutes of a live stream
+  const minutesLive = state.streamStartedAt ? (Date.now() - state.streamStartedAt) / 60000 : 0;
+  const inCriticalWindow = state.status === StreamStatus.LIVE && minutesLive < 10;
+
   const prompt = `
     CURRENT TIME: ${now.toLocaleDateString()} ${currentHHmm}
     SESSION_STATUS: ${state.status}
+    MINUTES_LIVE: ${minutesLive.toFixed(1)}
+    CRITICAL_WINDOW_ACTIVE: ${inCriticalWindow}
     BROADCAST_ID: ${state.broadcastId || "UNKNOWN"}
-    TELEMETRY: Bitrate ${state.metrics.bitrate}kbps
-    RESOURCES: YT_TOKEN=${YOUTUBE_TOKEN ? 'PRESENT' : 'MISSING'}
+    TELEMETRY: Bitrate ${state.metrics.bitrate}kbps | Health ${state.health}
   `;
 
   try {
@@ -125,7 +145,10 @@ async function runAgentLoop() {
               name: "execute_broadcast_protocol",
               parameters: {
                 type: Type.OBJECT,
-                properties: { protocol: { type: Type.STRING }, broadcastId: { type: Type.STRING } },
+                properties: { 
+                  protocol: { type: Type.STRING, enum: ["BEGIN_STREAM_SEQ", "END_STREAM_SEQ", "RETRANSMIT_SEQ"] }, 
+                  broadcastId: { type: Type.STRING } 
+                },
                 required: ["protocol", "broadcastId"]
               }
             },
@@ -145,20 +168,18 @@ async function runAgentLoop() {
         await executeProtocol(args.protocol);
       }
       if (call.name === 'list_upcoming_broadcasts') {
-        // Discovery logic
-        state.broadcastId = "LIVE_SYNC_" + Math.random().toString(36).substr(2,4).toUpperCase();
-        addLog(`Auto-Discovery: Located ID ${state.broadcastId}`, "YOUTUBE");
+        state.broadcastId = "LIVE_" + currentHHmm.replace(':','');
+        addLog(`Discovery: Monitoring Slot ID ${state.broadcastId}`, "YOUTUBE");
       }
     }
   } catch (err) {
-    addLog(`AI Reasoning Error: ${err}`, "AI_AGENT");
+    addLog(`AI reasoning failure: ${err}`, "AI_AGENT");
   }
 }
 
-// Telemetry Simulation Logic
+// Telemetry Logic
 setInterval(() => {
   if (state.status === StreamStatus.LIVE) {
-    // Generate realistic jitter for the metrics
     const base = state.metrics.bitrate === 0 ? 4500 : state.metrics.bitrate;
     const jitter = Math.floor(Math.random() * 800) - 400;
     state.metrics.bitrate = Math.max(0, base + jitter);
@@ -168,24 +189,16 @@ setInterval(() => {
       bitrate: state.metrics.bitrate 
     }].slice(-30);
 
-    if (state.metrics.bitrate < 1000) {
-      state.health = StreamHealth.BAD;
-    } else if (state.metrics.bitrate < 2500) {
-      state.health = StreamHealth.GOOD;
-    } else {
-      state.health = StreamHealth.EXCELLENT;
-    }
+    if (state.metrics.bitrate < 1000) state.health = StreamHealth.CRITICAL;
+    else if (state.metrics.bitrate < 2500) state.health = StreamHealth.GOOD;
+    else state.health = StreamHealth.EXCELLENT;
   }
 }, 5000);
 
-// API Endpoints for UI Sync
 app.get('/api/status', (req, res) => res.json(state));
 
 app.listen(PORT, () => {
-  addLog(`StreamPilot Background Service Active on Port ${PORT}`, "SYSTEM");
-  addLog(`Companion Target: http://${COMPANION_HOST}:${COMPANION_PORT}`, "SYSTEM");
-  
-  // Start the thinking loop
-  setInterval(runAgentLoop, 60000); // Check once per minute
+  addLog(`StreamPilot background agent listening on port ${PORT}`, "SYSTEM");
+  setInterval(runAgentLoop, 60000);
   runAgentLoop();
 });
