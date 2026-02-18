@@ -1,0 +1,8 @@
+{
+  "name": "StreamPilot AI Agent",
+  "description": "An autonomous AI broadcast engineer that monitors YouTube stream health and controls ATEM/Companion interfaces via intelligent function calling. It ensures seamless transitions from pre-roll to live and automatically handles stream closure when the session ends.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
